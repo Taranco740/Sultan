@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "Sultan",
+    "slug": "sultan-life-os",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.sultan.lifeos",
+      "adaptiveIcon": { "backgroundColor": "#0b0f14" }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+create index goal_steps_user_id_idx on public.goal_steps (user_id);
+create index workouts_user_id_idx on public.workouts (user_id);
+create index workout_sets_user_id_idx on public.workout_sets (user_id);
+create index workout_sets_workout_user_idx on public.workout_sets (workout_id, user_id);
+create index runs_user_id_idx on public.runs (user_id);
+create index checklists_user_id_idx on public.checklists (user_id);
+create index checklist_items_user_id_idx on public.checklist_items (user_id);
+create index checklist_items_checklist_user_idx on public.checklist_items (checklist_id, user_id);
+create index checklist_runs_user_id_idx on public.checklist_runs (user_id);
+create index checklist_runs_item_user_idx on public.checklist_runs (item_id, user_id);
+create index focus_items_goal_user_idx on public.focus_items (goal_id, user_id);
+create index ideas_user_id_idx on public.ideas (user_id);
+create index learning_items_user_id_idx on public.learning_items (user_id);
+create index project_tasks_project_user_idx on public.project_tasks (project_id, user_id);
+create index projects_user_id_idx on public.projects (user_id);
+create index relationships_user_id_idx on public.relationships (user_id);
