@@ -1,5 +1,5 @@
 #property strict
-#property version   "1.0"
+#property version   "1.1"
 #property description "Sultan read-only MT5 history synchronizer"
 
 input string InpSyncUrl = "https://uwbglnkdsgwbjorqxvcj.supabase.co/functions/v1/mt5-sync";
@@ -93,9 +93,12 @@ string DealJson(const ulong ticket)
 bool SendBatch(const string deals_json, const int count)
   {
    string body = StringFormat(
-      "{\"broker_server\":\"%s\",\"account_login\":\"%I64d\",\"deals\":[%s]}",
+      "{\"broker_server\":\"%s\",\"account_login\":\"%I64d\",\"balance\":%s,\"equity\":%s,\"currency\":\"%s\",\"deals\":[%s]}",
       JsonEscape(AccountInfoString(ACCOUNT_SERVER)),
       AccountInfoInteger(ACCOUNT_LOGIN),
+      DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 8),
+      DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 8),
+      JsonEscape(AccountInfoString(ACCOUNT_CURRENCY)),
       deals_json
    );
    char data[];
