@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Animated, KeyboardAvoidingView, Modal, Platform, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
-import type { TradeRecord, TradingAccount, TradingChecklist, TradingChecklistItem } from '@sultan/shared';
-import { getDailyOutcomes, getTradeInsights, localTradingDay, monthCalendarDays } from '@sultan/shared';
+import type { Mt5Deal, TradeRecord, TradingAccount, TradingChecklist, TradingChecklistItem } from '@sultan/shared';
+import { getDailyOutcomes, getMt5Insights, getMt5PositionSummaries, getTradeInsights, localTradingDay, monthCalendarDays } from '@sultan/shared';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 export default function App() {
@@ -17,6 +17,7 @@ export default function App() {
   const [items, setItems] = useState<TradingChecklistItem[]>([]);
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [mt5Deals, setMt5Deals] = useState<Mt5Deal[]>([]);
   const [tab, setTab] = useState<Tab>('dashboard');
   const [tradeForm, setTradeForm] = useState<TradeDraft>(emptyTrade);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -83,6 +84,28 @@ export default function App() {
         setTrades((data ?? []) as TradeRecord[]);
       });
     return () => { active = false; };
+  }, [session?.user.id, accountId]);
+
+  useEffect(() => {
+    const client = supabase;
+    const userId = session?.user.id;
+    if (!client || !userId || !accountId) { setMt5Deals([]); return; }
+    let active = true;
+    const loadDeals = async () => {
+      const allRows: Mt5Deal[] = [];
+      for (let from = 0; from < 100000; from += 1000) {
+        const { data, error } = await client.from('mt5_deals').select('*').eq('user_id', userId).eq('account_id', accountId).order('time_msc', { ascending: false }).range(from, from + 999);
+        if (!active) return;
+        if (error) { setMessage(error.message); return; }
+        const rows = (data ?? []) as Mt5Deal[];
+        allRows.push(...rows);
+        if (rows.length < 1000) break;
+      }
+      if (active) setMt5Deals(allRows);
+    };
+    void loadDeals();
+    const channel = client.channel(`mobile-mt5-deals-${accountId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'mt5_deals', filter: `account_id=eq.${accountId}` }, () => { void loadDeals(); }).subscribe();
+    return () => { active = false; void client.removeChannel(channel); };
   }, [session?.user.id, accountId]);
 
   useEffect(() => {
@@ -163,8 +186,12 @@ export default function App() {
     setTrades((rows) => [data as TradeRecord, ...rows]); setSelectedDay(payload.trading_day); setTradeForm(emptyTrade); setTab('journal'); setMessage('Trade saved to your journal.');
   }
   const calendarDays = monthCalendarDays(month);
-  const tradedDays = new Set(trades.map((trade) => trade.trading_day));
+  const mt5Positions = getMt5PositionSummaries(mt5Deals);
+  const mt5Insights = getMt5Insights(mt5Positions);
+  const importedDays = mt5Positions.map((position) => localTradingDay(new Date(position.openedAt)));
+  const tradedDays = new Set([...trades.map((trade) => trade.trading_day), ...importedDays]);
   const selectedTrades = trades.filter((trade) => trade.trading_day === selectedDay);
+  const selectedMt5Positions = mt5Positions.filter((position) => localTradingDay(new Date(position.openedAt)) === selectedDay);
   const insights = getTradeInsights(trades);
   const outcomeRows = getDailyOutcomes(trades);
   const cardContent = !accounts.length ? <View style={styles.empty}><View style={styles.plusMark}>＋</View><Text style={styles.cardTitle}>Add a trading account</Text><Text style={styles.body}>Create a Demo, Live, or Paper profile under this login. No broker password needed.</Text><TouchableOpacity style={styles.primary} onPress={() => setAccountOpen(true)}><Text style={styles.primaryText}>Add account</Text></TouchableOpacity></View> : (
@@ -211,7 +238,9 @@ export default function App() {
       </View>}
       {tab === 'routine' && cardContent}
       {tab === 'accounts' && <View style={styles.checklistCard}><Text style={styles.eyebrow}>ACCOUNT ORGANIZATION</Text><Text style={styles.cardTitle}>Trading accounts</Text><Text style={styles.body}>Use separate labels for Demo, Live, or Paper records. Never enter broker passwords.</Text><TouchableOpacity style={styles.primary} onPress={() => setAccountOpen(true)}><Text style={styles.primaryText}>＋ Add account</Text></TouchableOpacity>{accounts.map((account) => <TouchableOpacity key={account.id} onPress={() => { setAccountId(account.id); setTab('dashboard'); }} style={[styles.accountCard, account.id === accountId && styles.accountActive]}><Text style={styles.accountName}>{account.label}</Text><Text style={styles.accountMode}>{account.mode.toUpperCase()} · {account.broker_name || 'Account record only'}</Text></TouchableOpacity>)}</View>}
-      {tab === 'reports' && <View style={styles.checklistCard}><Text style={styles.eyebrow}>PERFORMANCE REVIEW</Text><Text style={styles.cardTitle}>How you traded</Text><View style={styles.reportRow}><Text style={styles.reportLabel}>Closed trades</Text><Text style={styles.reportValue}>{insights.closed}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Wins / losses</Text><Text style={styles.reportValue}>{insights.wins} / {insights.losses}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Breakeven / pending</Text><Text style={styles.reportValue}>{insights.breakeven} / {insights.pending}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Followed plan</Text><Text style={styles.reportValue}>{insights.planFollowingRate.toFixed(1)}%</Text></View><Text style={styles.helper}>These are journal labels, not balance or financial-return figures.</Text></View>}
+      {tab === 'journal' && accountId && <View style={styles.checklistCard}><Text style={styles.eyebrow}>IMPORTED FROM MT5</Text><Text style={styles.cardTitle}>Broker trade history</Text><Text style={styles.helper}>{mt5Deals.length} deals · updates while MT5 Desktop is syncing</Text>{mt5Positions.slice(0, 30).map((position) => <View key={position.key} style={styles.reportRow}><View style={{ flex: 1 }}><Text style={styles.reportLabel}>{position.symbol} · {position.side.toUpperCase()}</Text><Text style={styles.helper}>{new Date(position.openedAt).toLocaleString()} · {position.volume.toFixed(2)} lots · {position.status}</Text></View><Text style={styles.reportValue}>{position.status === 'closed' ? position.netProfit.toFixed(2) + ' ' + (position.currency || '') : 'Open'}</Text></View>)}{!mt5Positions.length && <Text style={styles.helper}>Connect MT5 from the Accounts page on web to import your history here.</Text>}</View>}
+      {tab === 'calendar' && accountId && selectedMt5Positions.length > 0 && <View style={styles.checklistCard}><Text style={styles.eyebrow}>MT5 HISTORY · {selectedDay}</Text><Text style={styles.cardTitle}>Imported positions</Text>{selectedMt5Positions.map((position) => <View key={position.key} style={styles.reportRow}><Text style={styles.reportLabel}>{position.symbol} · {position.side.toUpperCase()} · {position.status}</Text><Text style={styles.reportValue}>{position.status === 'closed' ? position.netProfit.toFixed(2) + ' ' + (position.currency || '') : 'Open'}</Text></View>)}</View>}
+      {tab === 'reports' && accountId && <View style={styles.checklistCard}><Text style={styles.eyebrow}>MT5 ACCOUNT RESULTS</Text><Text style={styles.cardTitle}>Broker history</Text><Text style={styles.helper}>Realized result includes recorded profit, commission, swap, and fees for closed positions.</Text><View style={styles.reportRow}><Text style={styles.reportLabel}>Realized net</Text><Text style={styles.reportValue}>{mt5Insights.realizedNet.toFixed(2)} {mt5Insights.currency}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Closed / open</Text><Text style={styles.reportValue}>{mt5Insights.closed} / {mt5Insights.open}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Wins / losses</Text><Text style={styles.reportValue}>{mt5Insights.wins} / {mt5Insights.losses}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Buy / sell positions</Text><Text style={styles.reportValue}>{mt5Insights.buys} / {mt5Insights.sells}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Win rate</Text><Text style={styles.reportValue}>{mt5Insights.winRate.toFixed(1)}%</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Lots opened</Text><Text style={styles.reportValue}>{mt5Insights.lots.toFixed(2)}</Text></View>{mt5Positions.slice(0, 20).map((position) => <View key={position.key} style={styles.reportRow}><View style={{ flex: 1 }}><Text style={styles.reportLabel}>{position.symbol} · {position.side.toUpperCase()}</Text><Text style={styles.helper}>{new Date(position.openedAt).toLocaleString()} · {position.status}</Text></View><Text style={styles.reportValue}>{position.status === 'closed' ? position.netProfit.toFixed(2) + ' ' + (position.currency || '') : 'Open'}</Text></View>)}</View>}      {tab === 'reports' && <View style={styles.checklistCard}><Text style={styles.eyebrow}>PERFORMANCE REVIEW</Text><Text style={styles.cardTitle}>How you traded</Text><View style={styles.reportRow}><Text style={styles.reportLabel}>Closed trades</Text><Text style={styles.reportValue}>{insights.closed}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Wins / losses</Text><Text style={styles.reportValue}>{insights.wins} / {insights.losses}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Breakeven / pending</Text><Text style={styles.reportValue}>{insights.breakeven} / {insights.pending}</Text></View><View style={styles.reportRow}><Text style={styles.reportLabel}>Followed plan</Text><Text style={styles.reportValue}>{insights.planFollowingRate.toFixed(1)}%</Text></View><Text style={styles.helper}>These are journal labels, not balance or financial-return figures.</Text></View>}
       {tab === 'journal' && accountId && <View style={styles.checklistCard}>
         <View style={styles.cardHeader}><View><Text style={styles.eyebrow}>TRADE JOURNAL</Text><Text style={styles.cardTitle}>How you traded</Text></View><Text style={styles.date}>{localTradingDay()}</Text></View>
         {!complete && <View style={styles.gate}><Text style={styles.helper}>Finish today's checklist before logging a trade.</Text><TouchableOpacity onPress={() => setTab('routine')}><Text style={styles.authToggle}>Open checklist ↗</Text></TouchableOpacity></View>}
