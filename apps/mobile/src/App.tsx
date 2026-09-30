@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, SafeAreaView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, KeyboardAvoidingView, Platform, SafeAreaView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 import type { DashboardArea } from '@sultan/shared';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
@@ -15,6 +15,11 @@ export default function App() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const entrance = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(entrance, { toValue: 1, duration: 520, useNativeDriver: true }).start();
+  }, [entrance]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -42,7 +47,8 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#090d11" />
-      <KeyboardAvoidingView style={styles.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <Animated.View style={[styles.page, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }] }]}>
+       <KeyboardAvoidingView style={styles.pageInner} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.topbar}>
           <View style={styles.brandMark}><Text style={styles.brandMarkText}>T</Text></View>
           <View><Text style={styles.brand}>TradeOS</Text><Text style={styles.caption}>DISCIPLINE, MADE VISIBLE</Text></View>
@@ -90,14 +96,16 @@ export default function App() {
           </View>
         )}
         <Text style={styles.footer}>No broker passwords. No trade signals. Just your process.</Text>
-      </KeyboardAvoidingView>
+       </KeyboardAvoidingView>
+      </Animated.View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#090d11' },
-  page: { flex: 1, paddingHorizontal: 22, paddingTop: 18, paddingBottom: 20 },
+  page: { flex: 1 },
+  pageInner: { flex: 1, paddingHorizontal: 22, paddingTop: 18, paddingBottom: 20 },
   topbar: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   brandMark: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#9be49c' },
   brandMarkText: { color: '#102016', fontSize: 20, fontWeight: '900' },
