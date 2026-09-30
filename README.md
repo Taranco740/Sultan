@@ -1,34 +1,34 @@
 # TradeOS
 
-TradeOS is a discipline and journaling platform for forex traders. It starts with a shared-account Android app and a compact always-on-top desktop companion.
+TradeOS is a trading-only discipline and journaling workspace. A single Supabase login syncs account profiles and personal pre-trade checklists between the responsive web app, Android app, and compact desktop side panel.
 
-## Apps
+## Workspace
 
-- `apps/web` is the existing responsive Vercel website.
-- `apps/mobile` is the Expo Android application.
-- `apps/desktop` is the Electron corner widget (320×420).
-- `packages/shared` contains TradeOS shared types.
-- `supabase` holds database schema and row-level security policies.
+- `apps/web` — responsive TradeOS web app, ready for Vercel.
+- `apps/mobile` — Expo application for Android.
+- `apps/desktop` — Electron checklist panel that stays on top beside a charting app.
+- `packages/shared` — shared account, checklist, and date types.
+- `supabase/migrations` — database schema and owner-only row-level security policies.
 
-Mobile and desktop use one Supabase account and database. The Vercel web app remains available as it is while the TradeOS clients are built. Use only Supabase publishable/legacy anon keys in client apps; never add service-role or secret keys to client code.
+Trading account profiles are organizational labels only. Do not enter broker credentials. TradeOS does not provide signals or financial advice.
 
-## Start the web preview
+## Run the web app
 
-Install dependencies with `pnpm install`, then run `pnpm dev:web` for the existing web app.
+Install dependencies with `pnpm install`, configure the Supabase values below, then run `pnpm dev:web`. Use `pnpm build:web` to create the production web build.
 
-## Android
+## Run Android
 
-Install dependencies with `pnpm install`, then run `pnpm dev:android` and open the Expo project on an Android device or emulator.
+Run `pnpm dev:android` and open the Expo project on an Android device or emulator.
 
-## Desktop
+## Run the desktop side panel
 
-Run `pnpm dev:desktop` to start the 320×420 always-on-top companion.
+Run `pnpm dev:desktop`. The panel is resizable, stays above other windows, and can be dragged by its title bar so it can sit beside TradingView or another charting app.
 
-## Configuration
+## Supabase configuration
 
-Copy `.env.example` to `.env` and set the Supabase project URL and publishable key. The publishable key is suitable for client apps only when every exposed table has row-level security enabled. Never put a Supabase secret or service-role key in a browser, desktop renderer, or mobile app.
+Copy `.env.example` to `.env` and set the Supabase project URL and publishable key (or legacy anon key). Apply the SQL migrations in order. Use only the publishable/anon key in browser, desktop renderer, and mobile clients. Never add a service-role key or broker password to client code or Git.
 
-## Current scope
+## Current phase
 
-Phase 0 establishes the typed monorepo, Supabase Auth, owner-only TradeOS schema, and Trading/Personal dashboard shell. Strategy checklist enforcement, journaling, Daily Focus, statistics, MT5 import, and life-area scores are planned follow-on phases.
+The current foundation includes email authentication, multiple account profiles, user-created checklists, daily checklist completion, and a log-trade gate that remains disabled until every checklist item is checked. Journaling, Backtest, trade calendar, and statistics are follow-on phases.
 

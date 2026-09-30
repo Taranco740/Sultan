@@ -3,13 +3,11 @@ import { join } from 'node:path';
 
 function createWindow() {
   const window = new BrowserWindow({
-    width: 320,
-    height: 420,
-    minWidth: 320,
-    maxWidth: 320,
-    minHeight: 420,
-    maxHeight: 420,
-    resizable: false,
+    width: 390,
+    height: 620,
+    minWidth: 340,
+    minHeight: 500,
+    resizable: true,
     alwaysOnTop: true,
     frame: false,
     backgroundColor: '#090d11',

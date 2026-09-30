@@ -1,69 +1,133 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import type { DashboardArea } from '@sultan/shared';
+import type { TradingAccount, TradingChecklist, TradingChecklistItem } from '@sultan/shared';
+import { localTradingDay } from '@sultan/shared';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
-declare global {
-  interface Window {
-    tradeosWindow: { minimize: () => void; close: () => void };
-  }
-}
-
-type AuthMode = 'sign-in' | 'sign-up';
+declare global { interface Window { tradeosWindow: { minimize: () => void; close: () => void } } }
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
-  const [area, setArea] = useState<DashboardArea>('trading');
-  const [mode, setMode] = useState<AuthMode>('sign-in');
+  const [accounts, setAccounts] = useState<TradingAccount[]>([]);
+  const [accountId, setAccountId] = useState('');
+  const [lists, setLists] = useState<TradingChecklist[]>([]);
+  const [listId, setListId] = useState('');
+  const [items, setItems] = useState<TradingChecklistItem[]>([]);
+  const [checks, setChecks] = useState<Record<string, boolean>>({});
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [note, setNote] = useState('');
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [accountName, setAccountName] = useState('');
+  const [accountMode, setAccountMode] = useState<'demo' | 'live' | 'paper'>('demo');
+  const [listName, setListName] = useState('');
+  const [draft, setDraft] = useState('');
+  const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
     void supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+    const { data } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
     return () => data.subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!supabase || !session) { setAccounts([]); setAccountId(''); return; }
+    let live = true;
+    void supabase.from('trading_accounts').select('*').eq('user_id', session.user.id).order('created_at').then(({ data, error }) => {
+      if (!live) return;
+      if (error) setMessage(error.message);
+      const rows = (data ?? []) as TradingAccount[];
+      setAccounts(rows); setAccountId((id) => rows.some((row) => row.id === id) ? id : rows[0]?.id ?? '');
+    });
+    return () => { live = false; };
+  }, [session?.user.id]);
+
+  useEffect(() => {
+    if (!supabase || !session || !accountId) { setLists([]); setListId(''); return; }
+    let live = true;
+    void supabase.from('trading_checklists').select('*').eq('user_id', session.user.id).eq('account_id', accountId).order('created_at').then(({ data, error }) => {
+      if (!live) return;
+      if (error) setMessage(error.message);
+      const rows = (data ?? []) as TradingChecklist[];
+      setLists(rows); setListId((id) => rows.some((row) => row.id === id) ? id : rows[0]?.id ?? '');
+    });
+    return () => { live = false; };
+  }, [session?.user.id, accountId]);
+
+  useEffect(() => {
+    if (!supabase || !session || !listId) { setItems([]); setChecks({}); return; }
+    let live = true;
+    void (async () => {
+      const { data, error } = await supabase.from('trading_checklist_items').select('*').eq('user_id', session.user.id).eq('checklist_id', listId).order('position');
+      if (!live) return;
+      if (error) { setMessage(error.message); return; }
+      const rows = (data ?? []) as TradingChecklistItem[]; setItems(rows);
+      if (!rows.length) { setChecks({}); return; }
+      const { data: done, error: checksError } = await supabase.from('trading_checklist_checks').select('item_id,checked').eq('user_id', session.user.id).eq('trading_day', localTradingDay()).in('item_id', rows.map((row) => row.id));
+      if (!live) return;
+      if (checksError) setMessage(checksError.message);
+      setChecks(Object.fromEntries((done ?? []).map((row) => [row.item_id, row.checked])));
+    })();
+    return () => { live = false; };
+  }, [session?.user.id, listId]);
+
   async function authenticate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!supabase) { setError('Add Supabase URL and publishable key to the app environment first.'); return; }
-    setBusy(true); setError(''); setNote('');
-    const result = mode === 'sign-in'
-      ? await supabase.auth.signInWithPassword({ email: email.trim(), password })
-      : await supabase.auth.signUp({ email: email.trim(), password });
+    event.preventDefault(); if (!supabase) { setMessage('Configure Supabase URL and publishable key first.'); return; }
+    setBusy(true); setMessage('');
+    const result = authMode === 'signin' ? await supabase.auth.signInWithPassword({ email: email.trim(), password }) : await supabase.auth.signUp({ email: email.trim(), password });
     setBusy(false);
-    if (result.error) setError(result.error.message);
-    else if (mode === 'sign-up' && !result.data.session) setNote('Check your email to confirm your account, then sign in.');
+    if (result.error) setMessage(result.error.message);
+    else if (authMode === 'signup' && !result.data.session) setMessage('Check your email to confirm your account, then sign in.');
   }
 
-  return (
-    <main className="window">
-      <header className="titlebar"><div className="brand"><span className="brand-mark">T</span><span>TradeOS</span></div><div className="window-actions"><button aria-label="Minimize" onClick={() => window.tradeosWindow.minimize()}>−</button><button aria-label="Close" onClick={() => window.tradeosWindow.close()}>×</button></div></header>
-      {session ? <section className="workspace">
-        <div className="eyebrow">YOUR WORKSPACE</div>
-        <h1>{area === 'trading' ? 'Trade with intention.' : 'Build a steady day.'}</h1>
-        <p className="intro">A calm space to follow your own process and reflect.</p>
-        <nav className="switcher" aria-label="Workspace area">{(['trading', 'personal'] as const).map((item) => <button key={item} className={area === item ? 'selected' : ''} onClick={() => setArea(item)}>{item === 'trading' ? 'Trading' : 'Personal'}</button>)}</nav>
-        <article className="card"><div className="eyebrow">{area === 'trading' ? 'TRADING DESK' : 'PERSONAL SPACE'}</div><h2>{area === 'trading' ? 'Your rules. Your journal.' : 'Make space for the rest.'}</h2><p>{area === 'trading' ? 'Start with your strategy and a deliberate pre-trade pause.' : 'Daily focus and life-area check-ins will live here.'}</p><span className="ready"><i /> Workspace ready</span></article>
-        <div className="account"><span>{session.user.email}</span><button className="text-button" onClick={() => void supabase?.auth.signOut()}>Sign out</button></div>
-      </section> : <section className="auth">
-        <div className="eyebrow">YOUR PRIVATE WORKSPACE</div><h1>Welcome to TradeOS.</h1><p className="intro">Sign in or create an account to sync across devices.</p>
-        <form onSubmit={(event) => void authenticate(event)}>
-          <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label>
-          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} minLength={8} required /></label>
-          {error && <p className="error" role="alert">{error}</p>}{note && <p className="note" role="status">{note}</p>}
-          {!isSupabaseConfigured && <p className="hint">Supabase credentials are not configured yet.</p>}
-          <button className="primary" disabled={busy}>{busy ? 'Please wait…' : mode === 'sign-in' ? 'Sign in  ↗' : 'Create account  ↗'}</button>
-        </form>
-        <button className="text-button auth-toggle" onClick={() => { setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in'); setError(''); setNote(''); }}>{mode === 'sign-in' ? 'Create an account' : 'Back to sign in'}</button>
-      </section>}
-      <footer>No broker passwords. No trade signals. Just your process.</footer>
-    </main>
-  );
+  async function createAccount() {
+    if (!supabase || !session || !accountName.trim()) return;
+    const { data, error } = await supabase.from('trading_accounts').insert({ user_id: session.user.id, label: accountName.trim(), mode: accountMode }).select().single();
+    if (error) { setMessage(error.message); return; }
+    const row = data as TradingAccount; setAccounts((rows) => [...rows, row]); setAccountId(row.id); setAccountName('');
+  }
+
+  async function createList() {
+    if (!supabase || !session || !accountId || !listName.trim()) return;
+    const { data, error } = await supabase.from('trading_checklists').insert({ user_id: session.user.id, account_id: accountId, title: listName.trim() }).select().single();
+    if (error) { setMessage(error.message); return; }
+    const row = data as TradingChecklist; setLists((rows) => [...rows, row]); setListId(row.id); setListName('');
+  }
+
+  async function addItem() {
+    if (!supabase || !session || !listId || !draft.trim()) return;
+    const { data, error } = await supabase.from('trading_checklist_items').insert({ user_id: session.user.id, checklist_id: listId, label: draft.trim(), position: items.length }).select().single();
+    if (error) { setMessage(error.message); return; }
+    setItems((rows) => [...rows, data as TradingChecklistItem]); setDraft('');
+  }
+
+  async function toggle(item: TradingChecklistItem) {
+    if (!supabase || !session) return;
+    const checked = !checks[item.id]; setChecks((rows) => ({ ...rows, [item.id]: checked }));
+    const { error } = await supabase.from('trading_checklist_checks').upsert({ user_id: session.user.id, item_id: item.id, trading_day: localTradingDay(), checked, updated_at: new Date().toISOString() }, { onConflict: 'item_id,trading_day' });
+    if (error) { setChecks((rows) => ({ ...rows, [item.id]: !checked })); setMessage(error.message); }
+  }
+
+  async function removeItem(item: TradingChecklistItem) {
+    if (!supabase || !session) return;
+    const { error } = await supabase.from('trading_checklist_items').delete().eq('id', item.id).eq('user_id', session.user.id);
+    if (error) { setMessage(error.message); return; }
+    setItems((rows) => rows.filter((row) => row.id !== item.id));
+  }
+
+  const complete = items.length > 0 && items.every((item) => checks[item.id]);
+  return <main className="window">
+    <header className="titlebar"><div className="brand"><span className="brand-mark">T</span><span>TradeOS <small>TRADING PANEL</small></span></div><div className="window-actions"><button aria-label="Minimize" onClick={() => window.tradeosWindow.minimize()}>−</button><button aria-label="Close" onClick={() => window.tradeosWindow.close()}>×</button></div></header>
+    {!session ? <section className="auth"><div className="eyebrow">YOUR PRIVATE TRADING DESK</div><h1>One trade at a time.</h1><p className="intro">Sign in to sync your accounts and checklist across devices.</p><form onSubmit={(event) => void authenticate(event)}><label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'} required /></label>{message && <p className="error" role="alert">{message}</p>}{!isSupabaseConfigured && <p className="hint">Supabase settings are not configured.</p>}<button className="primary" disabled={busy}>{busy ? 'Please wait…' : authMode === 'signin' ? 'Sign in ↗' : 'Create account ↗'}</button></form><button className="text-button auth-toggle" onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setMessage(''); }}>{authMode === 'signin' ? 'Create an account' : 'Back to sign in'}</button></section> : <section className="workspace">
+      <div className="dayline"><span className="eyebrow">PRE-TRADE ROUTINE</span><span>{localTradingDay()}</span></div><h1>Checklist for the day</h1><p className="intro">Your rules, beside your chart.</p>
+      <div className="account-area"><div className="field-label">TRADING ACCOUNT</div><div className="account-row">{accounts.map((account) => <button key={account.id} className={`chip ${account.id === accountId ? 'active' : ''}`} onClick={() => setAccountId(account.id)}>{account.label}<small>{account.mode.toUpperCase()}</small></button>)}</div><div className="create-row"><input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="New account name" maxLength={50} /><select value={accountMode} onChange={(e) => setAccountMode(e.target.value as typeof accountMode)}><option value="demo">Demo</option><option value="live">Live</option><option value="paper">Paper</option></select><button className="small-button" onClick={() => void createAccount()}>＋</button></div></div>
+      {accountId ? <><div className="list-area"><div className="field-label">CHECKLIST</div><div className="account-row">{lists.map((list) => <button key={list.id} className={`chip ${list.id === listId ? 'active' : ''}`} onClick={() => setListId(list.id)}>{list.title}</button>)}</div><div className="create-row"><input value={listName} onChange={(e) => setListName(e.target.value)} placeholder="Name a checklist" maxLength={60} /><button className="small-button" onClick={() => void createList()}>Create</button></div></div>
+      {listId && <><div className="progress"><span>{Object.values(checks).filter(Boolean).length} of {items.length} complete</span><b className={complete ? 'ready' : ''}>{complete ? 'READY' : 'LOG TRADE LOCKED'}</b></div><div className="track"><i style={{ width: `${items.length ? Object.values(checks).filter(Boolean).length / items.length * 100 : 0}%` }} /></div><div className="items">{items.map((item) => <div className="check-row" key={item.id}><button className={`checkbox ${checks[item.id] ? 'done' : ''}`} aria-label={`${checks[item.id] ? 'Uncheck' : 'Check'} ${item.label}`} onClick={() => void toggle(item)}>{checks[item.id] ? '✓' : ''}</button><span className={checks[item.id] ? 'item-done' : ''}>{item.label}</span><button className="remove" aria-label={`Remove ${item.label}`} onClick={() => void removeItem(item)}>×</button></div>)}</div>{!items.length && <p className="hint">Add your own pre-trade rules below.</p>}<div className="create-row item-create"><input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void addItem(); }} placeholder="Add your checklist rule" maxLength={120} /><button className="small-button" onClick={() => void addItem()}>Add</button></div><button className="log-button" disabled={!complete} onClick={() => setMessage('Checklist complete. Journaling is coming in the next phase.')}>Log trade <small>{complete ? 'Checklist complete' : 'Complete every item first'}</small></button></>}</> : <p className="hint">Add an account to start building a checklist.</p>}
+      <div className="account-bottom"><span title={session.user.email}>{session.user.email}</span><button className="text-button" onClick={() => void supabase?.auth.signOut()}>Sign out</button></div>{message && <p className="message" role="status">{message}<button onClick={() => setMessage('')}>×</button></p>}
+    </section>}
+    <footer>No broker passwords. No signals. Just your process.</footer>
+  </main>;
 }
 
