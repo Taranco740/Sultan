@@ -1,13 +1,14 @@
 {
   "expo": {
-    "name": "Sultan",
-    "slug": "sultan-life-os",
+    "name": "TradeOS",
+    "slug": "tradeos",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
-      "package": "com.sultan.lifeos",
+      "package": "com.sultan.tradeos",
       "adaptiveIcon": { "backgroundColor": "#0b0f14" }
     }
   }
 }
+

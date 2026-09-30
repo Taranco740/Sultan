@@ -1,11 +1,14 @@
 {
-  "name": "sultan",
+  "name": "tradeos",
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev:web": "pnpm --filter @sultan/web dev",
     "dev:android": "pnpm --filter @sultan/mobile start",
-    "build:web": "pnpm --filter @sultan/web build"
+    "dev:desktop": "pnpm --filter @tradeos/desktop dev",
+    "build:web": "pnpm --filter @sultan/web build",
+    "build:desktop": "pnpm --filter @tradeos/desktop build"
   }
 }
+
