@@ -1,28 +1,34 @@
-# Sultan
+# TradeOS
 
-Sultan is a personal operating system for web and Android, based on the attached Life OS blueprint. The first slice is the animated dashboard and Daily Focus. The product structure groups the blueprint's modules into four areas: Personal, Trading, Health, and Work & Wealth.
+TradeOS is a discipline and journaling platform for forex traders. It starts with a shared-account Android app and a compact always-on-top desktop companion.
 
 ## Apps
 
-- `apps/web` is the responsive Vercel website.
+- `apps/web` is the existing responsive Vercel website.
 - `apps/mobile` is the Expo Android application.
-- `packages/shared` contains shared types and scoring helpers.
-- `supabase` will hold the database schema, row-level security policies, and server functions.
+- `apps/desktop` is the Electron corner widget (320×420).
+- `packages/shared` contains TradeOS shared types.
+- `supabase` holds database schema and row-level security policies.
 
-The web and Android clients are designed to use one Supabase account and database. Until project credentials are configured, the web dashboard runs in preview mode with local demo data. Do not add private API keys to either client.
+Mobile and desktop use one Supabase account and database. The Vercel web app remains available as it is while the TradeOS clients are built. Use only Supabase publishable/legacy anon keys in client apps; never add service-role or secret keys to client code.
 
 ## Start the web preview
 
-Install dependencies with `pnpm install`, then run `pnpm dev:web`.
+Install dependencies with `pnpm install`, then run `pnpm dev:web` for the existing web app.
 
 ## Android
 
 Install dependencies with `pnpm install`, then run `pnpm dev:android` and open the Expo project on an Android device or emulator.
 
+## Desktop
+
+Run `pnpm dev:desktop` to start the 320×420 always-on-top companion.
+
 ## Configuration
 
-Copy `.env.example` to `.env` and set the Supabase project URL and publishable key after the backend project is ready. The publishable key is suitable for client apps only when every exposed table has row-level security enabled. Never put a Supabase secret or service-role key in a browser or mobile app.
+Copy `.env.example` to `.env` and set the Supabase project URL and publishable key. The publishable key is suitable for client apps only when every exposed table has row-level security enabled. Never put a Supabase secret or service-role key in a browser, desktop renderer, or mobile app.
 
 ## Current scope
 
-This starter establishes the shared app layout and the first Daily Focus slice. Trading checklists and journaling, health routines, work/wealth tracking, reminders, scoring, and the remaining blueprint modules are planned follow-on slices.
+Phase 0 establishes the typed monorepo, Supabase Auth, owner-only TradeOS schema, and Trading/Personal dashboard shell. Strategy checklist enforcement, journaling, Daily Focus, statistics, MT5 import, and life-area scores are planned follow-on phases.
+
