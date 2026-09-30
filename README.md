@@ -30,5 +30,5 @@ Copy `.env.example` to `.env` and set the Supabase project URL and publishable k
 
 ## Current phase
 
-The current foundation includes email authentication, multiple account profiles, user-created checklists, daily checklist completion, and a log-trade gate that remains disabled until every checklist item is checked. Journaling, Backtest, trade calendar, and statistics are follow-on phases.
+The current foundation includes email authentication, multiple account profiles, user-created daily checklists, a checklist-gated trade journal, outcome and plan-following notes, and a calendar of days with logged trades. Backtest and performance statistics are follow-on phases.
 

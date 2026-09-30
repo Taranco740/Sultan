@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import type { TradingAccount, TradingChecklist, TradingChecklistItem } from '@sultan/shared';
-import { localTradingDay } from '@sultan/shared';
+import type { TradeRecord, TradingAccount, TradingChecklist, TradingChecklistItem } from '@sultan/shared';
+import { localTradingDay, monthCalendarDays } from '@sultan/shared';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 declare global { interface Window { tradeosWindow: { minimize: () => void; close: () => void } } }
 
 export default function App() {
+  type Tab = 'routine' | 'journal' | 'calendar';
+  type TradeDraft = { symbol: string; side: 'buy' | 'sell'; setup: string; reason: string; emotion: string; lesson: string; followed_plan: boolean; outcome: 'pending' | 'win' | 'loss' | 'breakeven' };
+  const emptyTrade: TradeDraft = { symbol: '', side: 'buy', setup: '', reason: '', emotion: '', lesson: '', followed_plan: true, outcome: 'pending' };
   const [session, setSession] = useState<Session | null>(null);
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [accountId, setAccountId] = useState('');
@@ -15,6 +18,11 @@ export default function App() {
   const [listId, setListId] = useState('');
   const [items, setItems] = useState<TradingChecklistItem[]>([]);
   const [checks, setChecks] = useState<Record<string, boolean>>({});
+  const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [tab, setTab] = useState<Tab>('routine');
+  const [tradeForm, setTradeForm] = useState<TradeDraft>(emptyTrade);
+  const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [selectedDay, setSelectedDay] = useState(localTradingDay());
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
@@ -52,6 +60,17 @@ export default function App() {
       if (error) setMessage(error.message);
       const rows = (data ?? []) as TradingChecklist[];
       setLists(rows); setListId((id) => rows.some((row) => row.id === id) ? id : rows[0]?.id ?? '');
+    });
+    return () => { live = false; };
+  }, [session?.user.id, accountId]);
+
+  useEffect(() => {
+    if (!supabase || !session || !accountId) { setTrades([]); return; }
+    let live = true;
+    void supabase.from('trading_journal_entries').select('*').eq('user_id', session.user.id).eq('account_id', accountId).order('trading_day', { ascending: false }).order('created_at', { ascending: false }).then(({ data, error }) => {
+      if (!live) return;
+      if (error) setMessage(error.message);
+      setTrades((data ?? []) as TradeRecord[]);
     });
     return () => { live = false; };
   }, [session?.user.id, accountId]);
@@ -118,13 +137,37 @@ export default function App() {
   }
 
   const complete = items.length > 0 && items.every((item) => checks[item.id]);
+  async function logTrade() {
+    if (!supabase || !session || !accountId || !complete) return;
+    setBusy(true);
+    const payload = { ...tradeForm, symbol: tradeForm.symbol.trim().toUpperCase(), setup: tradeForm.setup.trim(), reason: tradeForm.reason.trim(), emotion: tradeForm.emotion.trim(), lesson: tradeForm.lesson.trim(), outcome: tradeForm.outcome || null, trading_day: localTradingDay(), account_id: accountId, user_id: session.user.id };
+    const { data, error } = await supabase.from('trading_journal_entries').insert(payload).select().single();
+    setBusy(false);
+    if (error) { setMessage(error.message); return; }
+    setTrades((rows) => [data as TradeRecord, ...rows]); setTradeForm(emptyTrade); setSelectedDay(payload.trading_day); setTab('journal'); setMessage('Trade saved.');
+  }
+  const calendarDays = useMemo(() => monthCalendarDays(month), [month]);
+  const tradedDays = useMemo(() => new Set(trades.map((trade) => trade.trading_day)), [trades]);
+  const selectedTrades = trades.filter((trade) => trade.trading_day === selectedDay);
   return <main className="window">
     <header className="titlebar"><div className="brand"><span className="brand-mark">T</span><span>TradeOS <small>TRADING PANEL</small></span></div><div className="window-actions"><button aria-label="Minimize" onClick={() => window.tradeosWindow.minimize()}>−</button><button aria-label="Close" onClick={() => window.tradeosWindow.close()}>×</button></div></header>
     {!session ? <section className="auth"><div className="eyebrow">YOUR PRIVATE TRADING DESK</div><h1>One trade at a time.</h1><p className="intro">Sign in to sync your accounts and checklist across devices.</p><form onSubmit={(event) => void authenticate(event)}><label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'} required /></label>{message && <p className="error" role="alert">{message}</p>}{!isSupabaseConfigured && <p className="hint">Supabase settings are not configured.</p>}<button className="primary" disabled={busy}>{busy ? 'Please wait…' : authMode === 'signin' ? 'Sign in ↗' : 'Create account ↗'}</button></form><button className="text-button auth-toggle" onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setMessage(''); }}>{authMode === 'signin' ? 'Create an account' : 'Back to sign in'}</button></section> : <section className="workspace">
       <div className="dayline"><span className="eyebrow">PRE-TRADE ROUTINE</span><span>{localTradingDay()}</span></div><h1>Checklist for the day</h1><p className="intro">Your rules, beside your chart.</p>
       <div className="account-area"><div className="field-label">TRADING ACCOUNT</div><div className="account-row">{accounts.map((account) => <button key={account.id} className={`chip ${account.id === accountId ? 'active' : ''}`} onClick={() => setAccountId(account.id)}>{account.label}<small>{account.mode.toUpperCase()}</small></button>)}</div><div className="create-row"><input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="New account name" maxLength={50} /><select value={accountMode} onChange={(e) => setAccountMode(e.target.value as typeof accountMode)}><option value="demo">Demo</option><option value="live">Live</option><option value="paper">Paper</option></select><button className="small-button" onClick={() => void createAccount()}>＋</button></div></div>
-      {accountId ? <><div className="list-area"><div className="field-label">CHECKLIST</div><div className="account-row">{lists.map((list) => <button key={list.id} className={`chip ${list.id === listId ? 'active' : ''}`} onClick={() => setListId(list.id)}>{list.title}</button>)}</div><div className="create-row"><input value={listName} onChange={(e) => setListName(e.target.value)} placeholder="Name a checklist" maxLength={60} /><button className="small-button" onClick={() => void createList()}>Create</button></div></div>
-      {listId && <><div className="progress"><span>{Object.values(checks).filter(Boolean).length} of {items.length} complete</span><b className={complete ? 'ready' : ''}>{complete ? 'READY' : 'LOG TRADE LOCKED'}</b></div><div className="track"><i style={{ width: `${items.length ? Object.values(checks).filter(Boolean).length / items.length * 100 : 0}%` }} /></div><div className="items">{items.map((item) => <div className="check-row" key={item.id}><button className={`checkbox ${checks[item.id] ? 'done' : ''}`} aria-label={`${checks[item.id] ? 'Uncheck' : 'Check'} ${item.label}`} onClick={() => void toggle(item)}>{checks[item.id] ? '✓' : ''}</button><span className={checks[item.id] ? 'item-done' : ''}>{item.label}</span><button className="remove" aria-label={`Remove ${item.label}`} onClick={() => void removeItem(item)}>×</button></div>)}</div>{!items.length && <p className="hint">Add your own pre-trade rules below.</p>}<div className="create-row item-create"><input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void addItem(); }} placeholder="Add your checklist rule" maxLength={120} /><button className="small-button" onClick={() => void addItem()}>Add</button></div><button className="log-button" disabled={!complete} onClick={() => setMessage('Checklist complete. Journaling is coming in the next phase.')}>Log trade <small>{complete ? 'Checklist complete' : 'Complete every item first'}</small></button></>}</> : <p className="hint">Add an account to start building a checklist.</p>}
+      {accountId && <nav className="tabs">{([['routine', 'Checklist'], ['journal', 'Journal'], ['calendar', 'Calendar']] as const).map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>}
+      {!accountId && <p className="hint">Add an account to start using your trading desk.</p>}
+      {tab === 'routine' && accountId && <><div className="list-area"><div className="field-label">CHECKLIST</div><div className="account-row">{lists.map((list) => <button key={list.id} className={`chip ${list.id === listId ? 'active' : ''}`} onClick={() => setListId(list.id)}>{list.title}</button>)}</div><div className="create-row"><input value={listName} onChange={(e) => setListName(e.target.value)} placeholder="Name a checklist" maxLength={60} /><button className="small-button" onClick={() => void createList()}>Create</button></div></div>
+      {listId && <><div className="progress"><span>{Object.values(checks).filter(Boolean).length} of {items.length} complete</span><b className={complete ? 'ready' : ''}>{complete ? 'READY' : 'LOG TRADE LOCKED'}</b></div><div className="track"><i style={{ width: `${items.length ? Object.values(checks).filter(Boolean).length / items.length * 100 : 0}%` }} /></div><div className="items">{items.map((item) => <div className="check-row" key={item.id}><button className={`checkbox ${checks[item.id] ? 'done' : ''}`} aria-label={`${checks[item.id] ? 'Uncheck' : 'Check'} ${item.label}`} onClick={() => void toggle(item)}>{checks[item.id] ? '✓' : ''}</button><span className={checks[item.id] ? 'item-done' : ''}>{item.label}</span><button className="remove" aria-label={`Remove ${item.label}`} onClick={() => void removeItem(item)}>×</button></div>)}</div>{!items.length && <p className="hint">Add your own pre-trade rules below.</p>}<div className="create-row item-create"><input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void addItem(); }} placeholder="Add your checklist rule" maxLength={120} /><button className="small-button" onClick={() => void addItem()}>Add</button></div><button className="log-button" disabled={!complete} onClick={() => complete && setTab('journal')}>Log trade <small>{complete ? 'Open journal' : 'Complete every item first'}</small></button></>}</>}
+      {tab === 'journal' && accountId && <div className="journal-panel"><div className="eyebrow">TRADE JOURNAL · {localTradingDay()}</div><h2>How you traded</h2>{!complete && <p className="hint">Complete today's checklist first. <button className="text-button" onClick={() => setTab('routine')}>Open checklist</button></p>}
+        <div className="create-row"><input value={tradeForm.symbol} onChange={(e) => setTradeForm((row) => ({ ...row, symbol: e.target.value }))} placeholder="Symbol" maxLength={24} /><select value={tradeForm.side} onChange={(e) => setTradeForm((row) => ({ ...row, side: e.target.value as TradeDraft['side'] }))}><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
+        <input className="journal-input" value={tradeForm.setup} onChange={(e) => setTradeForm((row) => ({ ...row, setup: e.target.value }))} placeholder="Setup" maxLength={120} />
+        <textarea className="journal-input" value={tradeForm.reason} onChange={(e) => setTradeForm((row) => ({ ...row, reason: e.target.value }))} placeholder="Reason" maxLength={1000} />
+        <input className="journal-input" value={tradeForm.emotion} onChange={(e) => setTradeForm((row) => ({ ...row, emotion: e.target.value }))} placeholder="Emotion" maxLength={80} />
+        <textarea className="journal-input" value={tradeForm.lesson} onChange={(e) => setTradeForm((row) => ({ ...row, lesson: e.target.value }))} placeholder="Lesson" maxLength={1000} />
+        <div className="create-row"><select value={tradeForm.outcome} onChange={(e) => setTradeForm((row) => ({ ...row, outcome: e.target.value as TradeDraft['outcome'] }))}><option value="pending">Pending</option><option value="win">Win</option><option value="loss">Loss</option><option value="breakeven">Breakeven</option></select><select value={String(tradeForm.followed_plan)} onChange={(e) => setTradeForm((row) => ({ ...row, followed_plan: e.target.value === 'true' }))}><option value="true">Followed plan</option><option value="false">Outside plan</option></select></div>
+        <button className="log-button" disabled={!complete || busy || !tradeForm.symbol.trim() || !tradeForm.setup.trim() || !tradeForm.reason.trim() || !tradeForm.emotion.trim() || !tradeForm.lesson.trim()} onClick={() => void logTrade()}>{busy ? 'Saving…' : 'Save journal entry ↗'}</button><div className="journal-list">{trades.slice(0, 10).map((trade) => <article key={trade.id}><strong>{trade.symbol} · {trade.side.toUpperCase()}</strong><small>{trade.trading_day} · {trade.setup} · {trade.outcome ?? 'Pending'}</small><p>{trade.reason}</p><small>{trade.emotion} · {trade.followed_plan ? 'Followed plan' : 'Outside plan'}</small><p>Lesson: {trade.lesson}</p></article>)}</div>
+      </div>}
+      {tab === 'calendar' && accountId && <div className="calendar-panel"><div className="eyebrow">TRADING HISTORY</div><h2>Days you traded</h2><div className="month-bar"><button aria-label="Previous month" onClick={() => setMonth((date) => new Date(date.getFullYear(), date.getMonth() - 1, 1))}>‹</button><strong>{new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(month)}</strong><button aria-label="Next month" onClick={() => setMonth((date) => new Date(date.getFullYear(), date.getMonth() + 1, 1))}>›</button></div><div className="calendar-grid weekdays">{['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => <span key={`${d}-${i}`}>{d}</span>)}</div><div className="calendar-grid">{calendarDays.map((day) => <button key={day} aria-label={`${day}${tradedDays.has(day) ? ', traded' : ''}`} className={`calendar-day ${day.slice(0, 7) !== localTradingDay(month).slice(0, 7) ? 'outside' : ''} ${tradedDays.has(day) ? 'traded' : ''} ${selectedDay === day ? 'selected' : ''}`} onClick={() => setSelectedDay(day)}>{Number(day.slice(-2))}{tradedDays.has(day) && <i />}</button>)}</div><div className="journal-list"><strong>{selectedDay}</strong>{selectedTrades.map((trade) => <article key={trade.id}><strong>{trade.symbol} · {trade.side.toUpperCase()}</strong><small>{trade.setup} · {trade.outcome ?? 'Pending'}</small><p>{trade.reason}</p></article>)}{!selectedTrades.length && <p className="hint">No trades logged this day.</p>}</div></div>}
       <div className="account-bottom"><span title={session.user.email}>{session.user.email}</span><button className="text-button" onClick={() => void supabase?.auth.signOut()}>Sign out</button></div>{message && <p className="message" role="status">{message}<button onClick={() => setMessage('')}>×</button></p>}
     </section>}
     <footer>No broker passwords. No signals. Just your process.</footer>
