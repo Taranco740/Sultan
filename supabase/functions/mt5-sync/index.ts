@@ -58,7 +58,11 @@ Deno.serve(async (request: Request) => {
     if (!payload || typeof payload !== "object") return json(400, { error: "Invalid MT5 sync payload." });
     const server = typeof payload.broker_server === "string" ? payload.broker_server.trim().slice(0, 100) : "";
     const login = integerString(payload.account_login);
-    if (!server || !login || !Array.isArray(payload.deals) || payload.deals.length > 100) {
+    const hasSnapshot = payload.balance !== undefined || payload.equity !== undefined || payload.currency !== undefined;
+    const balance = typeof payload.balance === "number" ? payload.balance : Number.NaN;
+    const equity = typeof payload.equity === "number" ? payload.equity : Number.NaN;
+    const currency = typeof payload.currency === "string" ? payload.currency.trim().slice(0, 12) : "";
+    if (!server || !login || (hasSnapshot && (!Number.isFinite(balance) || !Number.isFinite(equity) || Math.abs(balance) > 1e15 || Math.abs(equity) > 1e15 || !currency)) || !Array.isArray(payload.deals) || payload.deals.length > 100) {
       return json(400, { error: "Invalid MT5 account or deal batch." });
     }
 
@@ -126,9 +130,9 @@ Deno.serve(async (request: Request) => {
       }
     }
     const { error: syncError } = await supabase.from("mt5_connections")
-      .update({ last_sync_at: new Date().toISOString(), broker_server: server })
+      .update({ last_sync_at: new Date().toISOString(), broker_server: server, ...(hasSnapshot ? { latest_balance: balance, latest_equity: equity, currency } : {}) })
       .eq("id", connection.id).eq("user_id", connection.user_id);
-    if (syncError) return json(500, { error: "Deals were saved, but connection status could not be updated." });
+    if (syncError) return json(500, { error: "Deals were saved, but the latest account snapshot could not be updated." });
     return json(200, { accepted: rows.length });
   } catch (error) {
     console.error("MT5 sync request failed", error);
