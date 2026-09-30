@@ -14,7 +14,7 @@ The connector reports the terminal account number only during pairing. Sultan st
 
 ## Server deployment
 
-Apply the migration in `supabase/migrations/20260930102000_mt5_trade_sync.sql`, deploy `mt5-connection` with JWT verification enabled, then deploy `mt5-sync` with JWT verification disabled. The second function verifies the per-connection bearer key itself; never disable its code-level token check.
+Apply the migration in `supabase/migrations/20260930123546_mt5_trade_sync.sql`, deploy `mt5-connection` with JWT verification enabled, then deploy `mt5-sync` with JWT verification disabled. The second function verifies the per-connection bearer key itself; never disable its code-level token check.
 
 ```sh
 supabase functions deploy mt5-connection
