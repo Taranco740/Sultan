@@ -44,11 +44,14 @@ string DealTypeName(const long deal_type)
       case DEAL_TYPE_COMMISSION: return "commission";
       case DEAL_TYPE_COMMISSION_DAILY: return "commission_daily";
       case DEAL_TYPE_COMMISSION_MONTHLY: return "commission_monthly";
+      case DEAL_TYPE_COMMISSION_AGENT_DAILY: return "commission_daily";
+      case DEAL_TYPE_COMMISSION_AGENT_MONTHLY: return "commission_monthly";
       case DEAL_TYPE_INTEREST: return "interest";
       case DEAL_TYPE_BUY_CANCELED: return "correction";
       case DEAL_TYPE_SELL_CANCELED: return "correction";
-      case DEAL_TYPE_DIVIDEND: return "dividend";
-      case DEAL_TYPE_TAX: return "tax";
+      case DEAL_DIVIDEND: return "dividend";
+      case DEAL_DIVIDEND_FRANKED: return "dividend";
+      case DEAL_TAX: return "tax";
       default: return "other";
      }
   }
@@ -151,7 +154,9 @@ bool SynchronizeHistory()
    g_cursor = until;
    g_last_sync = until;
    g_trade_changed = false;
-   GlobalVariableSet("SultanMT5_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)), (double)g_cursor);
+   string cursor_key = "SultanMT5_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + StringSubstr(InpConnectionKey, 0, 8);
+   StringReplace(cursor_key, "-", "_");
+   GlobalVariableSet(cursor_key, (double)g_cursor);
    g_busy = false;
    return true;
   }
@@ -163,7 +168,8 @@ int OnInit()
       Print("Enter the one-time Sultan connection key and public API key in the EA inputs.");
       return INIT_PARAMETERS_INCORRECT;
      }
-   string cursor_key = "SultanMT5_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+   string cursor_key = "SultanMT5_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + StringSubstr(InpConnectionKey, 0, 8);
+   StringReplace(cursor_key, "-", "_");
    if(GlobalVariableCheck(cursor_key)) g_cursor = (datetime)GlobalVariableGet(cursor_key);
    else g_cursor = TimeCurrent() - MathMax(1, InpBackfillDays) * 86400;
    EventSetTimer(MathMax(10, InpPollSeconds));
