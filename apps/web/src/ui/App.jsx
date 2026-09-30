@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getDailyOutcomes, getTradeInsights, localTradingDay, monthCalendarDays } from '@sultan/shared';
+import { getDailyOutcomes, getMt5Insights, getMt5PositionSummaries, getTradeInsights, localTradingDay, monthCalendarDays } from '@sultan/shared';
 import { isSupabaseConfigured, supabase } from '../lib/supabase.js';
 
 const emptyTrade = { symbol: '', side: 'buy', setup: '', reason: '', emotion: '', lesson: '', followed_plan: true, outcome: 'pending' };
 const monthLabel = (date) => new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(date);
+const formatMoney = (value, currency) => {
+  try { return new Intl.NumberFormat('en', { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 2 }).format(value); }
+  catch { return `${currency || ''} ${value.toFixed(2)}`.trim(); }
+};
 const navItems = [
   { id: 'dashboard', icon: '⌂', label: 'Dashboard' },
   { id: 'journal', icon: '✎', label: 'Journal' },
@@ -40,6 +44,11 @@ function OutcomeChart({ rows, compact = false }) {
   </div>;
 }
 
+function Mt5Table({ positions, detailed = false }) {
+  if (!positions.length) return <div className="empty-table">MT5 trade history will appear here after the terminal syncs.</div>;
+  return <div className="trade-table-wrap"><table className="trade-table mt5-table"><thead><tr><th>SYMBOL</th><th>OPENED</th><th>POSITION</th><th>STATUS</th><th>NET RESULT</th>{detailed && <th>DEALS</th>}</tr></thead><tbody>{positions.map((position) => <tr key={position.key}><td><strong>{position.symbol}</strong><small>{position.side.toUpperCase()} · {position.volume.toFixed(2)} lots</small></td><td>{new Date(position.openedAt).toLocaleString()}</td><td>{position.positionId}</td><td><span className={`outcome-pill ${position.status}`}>{position.status}</span></td><td className={position.netProfit > 0 ? 'mt5-positive' : position.netProfit < 0 ? 'mt5-negative' : ''}>{position.status === 'closed' ? formatMoney(position.netProfit, position.currency) : '—'}</td>{detailed && <td>{position.dealCount}</td>}</tr>)}</tbody></table></div>;
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState('');
@@ -52,6 +61,10 @@ export default function App() {
   const [items, setItems] = useState([]);
   const [checks, setChecks] = useState({});
   const [trades, setTrades] = useState([]);
+  const [mt5Deals, setMt5Deals] = useState([]);
+  const [mt5Connections, setMt5Connections] = useState([]);
+  const [pairingInfo, setPairingInfo] = useState(null);
+  const [mt5Label, setMt5Label] = useState('MetaTrader 5');
   const [tab, setTab] = useState('dashboard');
   const [tradeForm, setTradeForm] = useState(emptyTrade);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -117,6 +130,39 @@ export default function App() {
   }, [user, accountId]);
 
   useEffect(() => {
+    if (!supabase || !user || !accountId) { setMt5Deals([]); return undefined; }
+    let active = true;
+    const loadDeals = async () => {
+      const allRows = [];
+      for (let from = 0; from < 100000; from += 1000) {
+        const { data, error } = await supabase.from('mt5_deals').select('*').eq('user_id', user.id).eq('account_id', accountId).order('time_msc', { ascending: false }).range(from, from + 999);
+        if (!active) return;
+        if (error) { setMessage(error.message); return; }
+        const rows = data ?? [];
+        allRows.push(...rows);
+        if (rows.length < 1000) break;
+      }
+      if (active) setMt5Deals(allRows);
+    };
+    void loadDeals();
+    const channel = supabase.channel(`mt5-deals-${accountId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'mt5_deals', filter: `account_id=eq.${accountId}` }, () => { void loadDeals(); }).subscribe();
+    return () => { active = false; void supabase.removeChannel(channel); };
+  }, [user, accountId]);
+
+  useEffect(() => {
+    if (!supabase || !user || !accountId) { setMt5Connections([]); return undefined; }
+    let active = true;
+    const loadConnections = () => supabase.from('mt5_connections').select('id,user_id,account_id,label,broker_server,last_sync_at,created_at,revoked_at').eq('user_id', user.id).eq('account_id', accountId).order('created_at', { ascending: false }).then(({ data, error }) => {
+      if (!active) return;
+      if (error) { setMessage(error.message); return; }
+      setMt5Connections(data ?? []);
+    });
+    void loadConnections();
+    const channel = supabase.channel(`mt5-connections-${accountId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'mt5_connections', filter: `account_id=eq.${accountId}` }, () => { void loadConnections(); }).subscribe();
+    return () => { active = false; void supabase.removeChannel(channel); };
+  }, [user, accountId]);
+
+  useEffect(() => {
     if (!supabase || !user || !checklistId) { setItems([]); setChecks({}); return undefined; }
     let active = true;
     void (async () => {
@@ -152,6 +198,19 @@ export default function App() {
     const { data, error } = await supabase.from('trading_accounts').insert({ label: accountLabel.trim(), broker_name: brokerName.trim() || null, mode: accountMode, user_id: user.id }).select().single();
     if (error) { setMessage(error.message); return; }
     setAccounts((rows) => [...rows, data]); setAccountId(data.id); setAccountLabel(''); setBrokerName(''); setAccountMode('demo'); setShowAccountForm(false);
+  }
+
+  async function manageMt5Connection(action, connectionId = '') {
+    if (!supabase || !user || !accountId) return;
+    setBusy(true); setMessage('');
+    const { data, error } = await supabase.functions.invoke('mt5-connection', { body: { action, account_id: accountId, connection_id: connectionId, label: mt5Label.trim() || 'MetaTrader 5' } });
+    setBusy(false);
+    if (error || data?.error) { setMessage(data?.error || error?.message || 'Could not update the MT5 connection.'); return; }
+    if (data?.token) setPairingInfo({ token: data.token, publishableKey: supabase.supabaseKey, connectionId: data.connection?.id ?? connectionId });
+    if (action === 'revoke') setMessage('MT5 connection revoked.');
+    if (data?.token) setMessage('Copy the one-time key into the MT5 connector now.');
+    const { data: rows } = await supabase.from('mt5_connections').select('id,user_id,account_id,label,broker_server,last_sync_at,created_at,revoked_at').eq('user_id', user.id).eq('account_id', accountId).order('created_at', { ascending: false });
+    setMt5Connections(rows ?? []);
   }
 
   async function addChecklist(event) {
@@ -198,8 +257,12 @@ export default function App() {
   }
 
   const calendarDays = useMemo(() => monthCalendarDays(month), [month]);
-  const tradedDays = useMemo(() => new Set(trades.map((trade) => trade.trading_day)), [trades]);
+  const mt5Positions = useMemo(() => getMt5PositionSummaries(mt5Deals), [mt5Deals]);
+  const mt5Insights = useMemo(() => getMt5Insights(mt5Positions), [mt5Positions]);
+  const importedDays = useMemo(() => mt5Positions.map((position) => localTradingDay(new Date(position.openedAt))), [mt5Positions]);
+  const tradedDays = useMemo(() => new Set([...trades.map((trade) => trade.trading_day), ...importedDays]), [trades, importedDays]);
   const selectedTrades = trades.filter((trade) => trade.trading_day === selectedDay);
+  const selectedMt5Positions = mt5Positions.filter((position) => localTradingDay(new Date(position.openedAt)) === selectedDay);
   const filteredTrades = useMemo(() => {
     const cutoff = period === 'all' ? null : new Date(Date.now() - Number(period) * 86400000).toISOString().slice(0, 10);
     return trades.filter((trade) => (!cutoff || trade.trading_day >= cutoff) && (!search || `${trade.symbol} ${trade.setup} ${trade.reason} ${trade.emotion}`.toLowerCase().includes(search.toLowerCase())));
@@ -247,12 +310,18 @@ export default function App() {
 
         {tab === 'journal' && <div className="journal-layout"><section className="panel journal-compose"><div className="panel-heading"><div><span className="eyebrow">TRADE JOURNAL</span><h2>How you traded</h2></div><span className="date-chip">{localTradingDay()}</span></div>{!complete && <p className="gate-note">Finish today’s checklist before logging a trade. <button onClick={() => setTab('routine')}>Open checklist ↗</button></p>}<form className="journal-form" onSubmit={logTrade}><div className="journal-fields"><label>Symbol<input required maxLength={24} placeholder="e.g. EURUSD" value={tradeForm.symbol} onChange={(event) => setTradeForm({ ...tradeForm, symbol: event.target.value })} /></label><label>Side<select value={tradeForm.side} onChange={(event) => setTradeForm({ ...tradeForm, side: event.target.value })}><option value="buy">Buy</option><option value="sell">Sell</option></select></label><label>Setup<input required maxLength={120} placeholder="Your setup name" value={tradeForm.setup} onChange={(event) => setTradeForm({ ...tradeForm, setup: event.target.value })} /></label><label>Outcome<select value={tradeForm.outcome} onChange={(event) => setTradeForm({ ...tradeForm, outcome: event.target.value })}><option value="pending">Pending</option><option value="win">Win</option><option value="loss">Loss</option><option value="breakeven">Breakeven</option></select></label></div><label>Reason for the trade<textarea required maxLength={1000} rows={3} placeholder="What made this trade fit your plan?" value={tradeForm.reason} onChange={(event) => setTradeForm({ ...tradeForm, reason: event.target.value })} /></label><div className="journal-fields"><label>Emotion<input required maxLength={80} placeholder="How did you feel?" value={tradeForm.emotion} onChange={(event) => setTradeForm({ ...tradeForm, emotion: event.target.value })} /></label><label>Did you follow your plan?<select value={String(tradeForm.followed_plan)} onChange={(event) => setTradeForm({ ...tradeForm, followed_plan: event.target.value === 'true' })}><option value="true">Yes</option><option value="false">No</option></select></label></div><label>Lesson<textarea required maxLength={1000} rows={3} placeholder="What will you remember next time?" value={tradeForm.lesson} onChange={(event) => setTradeForm({ ...tradeForm, lesson: event.target.value })} /></label><button className="primary journal-submit" disabled={!complete || busy || !accountId}>{busy ? 'Saving…' : 'Save journal entry ↗'}</button></form></section><section className="panel recent-trades"><div className="eyebrow">RECENT TRADES</div><h2>Your journal</h2><TradeTable trades={filteredTrades} detailed />{!trades.length && <p className="empty-hint">Saved trade notes will appear here.</p>}</section></div>}
 
+        {tab === 'journal' && !!accountId && <section className="panel mt5-history-panel"><div className="panel-heading"><div><span className="eyebrow">IMPORTED FROM MT5</span><h2>Broker trade history</h2></div><span className="date-chip">{mt5Deals.length} deals</span></div><Mt5Table positions={mt5Positions.slice(0, 30)} detailed /></section>}
         {tab === 'accounts' && <section className="accounts-page"><div className="accounts-intro"><div><span className="eyebrow">ACCOUNT ORGANIZATION</span><h2>Your trading accounts</h2><p className="muted">Create a separate workspace for each Demo, Live, or Paper account. Sultan stores labels and journal records only.</p></div><button className="primary" onClick={() => setShowAccountForm((value) => !value)}>＋ Add account</button></div>{showAccountForm && <form className="inline-form account-form panel" onSubmit={addAccount}><input required maxLength={50} placeholder="Account label (e.g. Demo 1)" value={accountLabel} onChange={(event) => setAccountLabel(event.target.value)} /><input maxLength={60} placeholder="Broker name (optional)" value={brokerName} onChange={(event) => setBrokerName(event.target.value)} /><select value={accountMode} onChange={(event) => setAccountMode(event.target.value)}><option value="demo">Demo</option><option value="live">Live</option><option value="paper">Paper</option></select><button className="primary compact">Save account</button></form>}<div className="account-grid">{accounts.map((row) => <article className={`panel account-card ${row.id === accountId ? 'current' : ''}`} key={row.id}><div className="account-card-top"><span className="account-avatar">{row.label.slice(0, 1).toUpperCase()}</span><span className="account-mode-pill">{row.mode.toUpperCase()}</span></div><h3>{row.label}</h3><p>{row.broker_name || 'Personal trading account'}</p><div className="account-card-meta"><span>{row.id === accountId ? 'Currently active' : 'Use the account selector above'}</span><button className="secondary compact" onClick={() => { setAccountId(row.id); setTab('dashboard'); }}>{row.id === accountId ? 'Selected' : 'Open account'}</button></div></article>)}{!accounts.length && <div className="panel empty-state"><h3>Your first account starts here</h3><p>Create an account label to separate your trading records. No broker login details are requested.</p><button className="primary" onClick={() => setShowAccountForm(true)}>Add trading account</button></div>}</div></section>}
 
+        {tab === 'accounts' && !!accountId && <section className="panel mt5-connect-panel"><div className="mt5-heading"><div><span className="eyebrow">READ-ONLY CONNECTION</span><h2>Connect MetaTrader 5</h2><p className="muted">MT5 Desktop syncs deal history while it is running. Your broker password stays in MT5.</p></div><span className="mt5-mark">MT5</span></div><div className="mt5-pair-controls"><label className="field-label">CONNECTION NAME<input maxLength={60} value={mt5Label} onChange={(event) => setMt5Label(event.target.value)} /></label><button className="primary" disabled={busy} onClick={() => void manageMt5Connection('create')}>{busy ? 'Preparing…' : '＋ Create MT5 connection'}</button></div><p className="mt5-note">Select this Sultan account in MT5, attach Sultan Trade Sync to a chart, and paste the one-time key. The connector reads trade history only; it cannot place or change orders.</p><div className="mt5-connections">{mt5Connections.map((connection) => <article className="mt5-connection" key={connection.id}><div className="mt5-connection-main"><strong>{connection.label}</strong><span className="mt5-state">{connection.revoked_at ? 'Revoked' : connection.last_sync_at ? 'Syncing' : 'Waiting for MT5'}</span><small>{connection.broker_server ? connection.broker_server + ' · ' : ''}{connection.last_sync_at ? 'Last sync ' + new Date(connection.last_sync_at).toLocaleString() : 'No terminal has paired yet'}</small></div>{!connection.revoked_at && <div className="mt5-connection-actions"><button className="secondary compact" disabled={busy} onClick={() => void manageMt5Connection('rotate', connection.id)}>Rotate key</button><button className="quiet-button compact" disabled={busy} onClick={() => void manageMt5Connection('revoke', connection.id)}>Revoke</button></div>}</article>)}</div></section>}
+
+        {pairingInfo && <div className="pairing-overlay"><section className="pairing-modal" role="dialog" aria-modal="true" aria-labelledby="pairing-title"><button className="pairing-close" aria-label="Close one-time setup details" onClick={() => setPairingInfo(null)}>×</button><span className="eyebrow">ONE-TIME SETUP</span><h2 id="pairing-title">Finish connecting MT5</h2><p>Copy this key into the <b>Connection Key</b> input for Sultan Trade Sync in MetaTrader 5. It will not be shown again.</p><label className="field-label">CONNECTION KEY<code className="pairing-secret">{pairingInfo.token}</code></label><button className="primary" onClick={() => { void navigator.clipboard.writeText(pairingInfo.token); setMessage('Connection key copied.'); }}>Copy connection key</button><details><summary>Show MT5 endpoint and public API key</summary><label className="field-label">SYNC URL<code className="pairing-detail">https://uwbglnkdsgwbjorqxvcj.supabase.co/functions/v1/mt5-sync</code></label><label className="field-label">PUBLIC SUPABASE KEY<code className="pairing-detail">{pairingInfo.publishableKey}</code></label></details><p className="mt5-note">The key can upload trade data for this connection only. Revoke it if lost. Do not paste it into a public chart, message, or shared screenshot.</p></section></div>}
+        {tab === 'calendar' && selectedMt5Positions.length > 0 && <section className="panel mt5-history-panel"><div className="eyebrow">MT5 HISTORY · {selectedDay}</div><h2>Imported positions</h2><Mt5Table positions={selectedMt5Positions} detailed /></section>}
         {tab === 'calendar' && <section className="panel calendar-card"><div className="calendar-head"><div><span className="eyebrow">TRADING HISTORY</span><h2>Days you traded</h2><p>Pick a day to review its journal entries.</p></div><div className="month-controls"><button aria-label="Previous month" onClick={() => setMonth((date) => new Date(date.getFullYear(), date.getMonth() - 1, 1))}>‹</button><strong>{monthLabel(month)}</strong><button aria-label="Next month" onClick={() => setMonth((date) => new Date(date.getFullYear(), date.getMonth() + 1, 1))}>›</button></div></div><div className="calendar-grid calendar-weekdays">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{calendarDays.map((day) => <button key={day} aria-label={`${day}${tradedDays.has(day) ? ', traded' : ''}`} className={`calendar-day ${day.slice(0, 7) === localTradingDay(month).slice(0, 7) ? '' : 'outside'} ${tradedDays.has(day) ? 'traded' : ''} ${selectedDay === day ? 'selected' : ''}`} onClick={() => setSelectedDay(day)}><span>{Number(day.slice(-2))}</span>{tradedDays.has(day) && <i aria-label="Trades logged" />}</button>)}</div><div className="selected-day-trades"><h3>{new Date(`${selectedDay}T12:00:00`).toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</h3><TradeTable trades={selectedTrades} detailed />{!selectedTrades.length && <p className="empty-hint">No trades logged on this day.</p>}</div></section>}
 
-        {tab === 'reports' && <section className="reports-page"><div className="reports-heading"><div><span className="eyebrow">PERFORMANCE REVIEW</span><h2>How you traded</h2><p className="muted">A view of journaled outcomes and self-reported process habits.</p></div></div><div className="report-summary"><div className="panel report-stat"><span>Closed trades</span><strong>{insights.closed}</strong></div><div className="panel report-stat"><span>Wins / losses</span><strong>{insights.wins} <small>/</small> {insights.losses}</strong></div><div className="panel report-stat"><span>Followed plan</span><strong>{insights.planFollowingRate.toFixed(1)}<small>%</small></strong></div><div className="panel report-stat"><span>Traded days</span><strong>{insights.tradedDays}</strong></div></div><section className="panel report-chart"><div className="panel-heading"><div><span className="eyebrow">DAILY OUTCOMES</span><h2>Wins minus losses</h2></div></div><OutcomeChart rows={outcomeRows} /></section><section className="panel report-breakdown"><h3>Outcome breakdown</h3><div><span>Wins</span><b>{insights.wins}</b></div><div><span>Losses</span><b>{insights.losses}</b></div><div><span>Breakeven</span><b>{insights.breakeven}</b></div><div><span>Pending</span><b>{insights.pending}</b></div><p>These are journal labels, not balance, return, or financial-performance figures.</p></section></section>}
+        {tab === 'reports' && <section className="reports-page"><div className="reports-heading"><div><span className="eyebrow">PERFORMANCE REVIEW</span><h2>How you traded</h2><p className="muted">Journal habits and imported MT5 results are shown separately so broker data is not mistaken for your notes.</p></div></div><div className="report-summary"><div className="panel report-stat"><span>Closed trades</span><strong>{insights.closed}</strong></div><div className="panel report-stat"><span>Wins / losses</span><strong>{insights.wins} <small>/</small> {insights.losses}</strong></div><div className="panel report-stat"><span>Followed plan</span><strong>{insights.planFollowingRate.toFixed(1)}<small>%</small></strong></div><div className="panel report-stat"><span>Traded days</span><strong>{insights.tradedDays}</strong></div></div><section className="panel report-chart"><div className="panel-heading"><div><span className="eyebrow">DAILY OUTCOMES</span><h2>Wins minus losses</h2></div></div><OutcomeChart rows={outcomeRows} /></section><section className="panel report-breakdown"><h3>Outcome breakdown</h3><div><span>Wins</span><b>{insights.wins}</b></div><div><span>Losses</span><b>{insights.losses}</b></div><div><span>Breakeven</span><b>{insights.breakeven}</b></div><div><span>Pending</span><b>{insights.pending}</b></div><p>These are journal labels, not balance, return, or financial-performance figures.</p></section></section>}
 
+        {tab === 'reports' && !!accountId && <section className="panel mt5-history-panel mt5-report"><div className="panel-heading"><div><span className="eyebrow">MT5 ACCOUNT RESULTS</span><h2>Broker history</h2><p>Realized result sums closed position deals, including recorded commission, swap, and fees.</p></div><span className="date-chip">{mt5Stats.currency || 'Account currency'}</span></div><div className="mt5-stat-grid"><article><small>REALIZED NET</small><strong>{formatMoney(mt5Stats.realizedNet, mt5Stats.currency)}</strong></article><article><small>CLOSED / OPEN</small><strong>{mt5Stats.closed} / {mt5Stats.open}</strong></article><article><small>WINS / LOSSES</small><strong>{mt5Stats.wins} / {mt5Stats.losses}</strong></article><article><small>BUY / SELL POSITIONS</small><strong>{mt5Stats.buys} / {mt5Stats.sells}</strong></article><article><small>WIN RATE</small><strong>{mt5Stats.winRate.toFixed(1)}%</strong></article><article><small>LOTS OPENED</small><strong>{mt5Stats.lots.toFixed(2)}</strong></article></div><Mt5Table positions={mt5Positions.slice(0, 100)} detailed /></section>}
         {message && <div className="toast" role="status">{message}<button onClick={() => setMessage('')}>×</button></div>}
       </main>
     </section>
