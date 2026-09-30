@@ -20,6 +20,7 @@ export default function App() {
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [mt5Deals, setMt5Deals] = useState<Mt5Deal[]>([]);
+  const [accountSnapshots, setAccountSnapshots] = useState<Record<string, { account_id: string; latest_balance: number | null; latest_equity: number | null; currency: string | null; last_sync_at: string | null }>>({});
   const [tab, setTab] = useState<Tab>('routine');
   const [tradeForm, setTradeForm] = useState<TradeDraft>(emptyTrade);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -75,6 +76,24 @@ export default function App() {
     });
     return () => { live = false; };
   }, [session?.user.id, accountId]);
+
+  useEffect(() => {
+    const client = supabase;
+    const userId = session?.user.id;
+    if (!client || !userId) { setAccountSnapshots({}); return; }
+    let live = true;
+    const loadSnapshots = async () => {
+      const { data, error } = await client.from('mt5_connections').select('account_id,latest_balance,latest_equity,currency,last_sync_at').eq('user_id', userId).order('last_sync_at', { ascending: false, nullsFirst: false });
+      if (!live) return;
+      if (error) { setMessage(error.message); return; }
+      const next: Record<string, { account_id: string; latest_balance: number | null; latest_equity: number | null; currency: string | null; last_sync_at: string | null }> = {};
+      for (const row of (data ?? []) as Array<{ account_id: string; latest_balance: number | null; latest_equity: number | null; currency: string | null; last_sync_at: string | null }>) if (!next[row.account_id]) next[row.account_id] = row;
+      setAccountSnapshots(next);
+    };
+    void loadSnapshots();
+    const channel = client.channel(`desktop-mt5-snapshots-${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'mt5_connections', filter: `user_id=eq.${userId}` }, () => { void loadSnapshots(); }).subscribe();
+    return () => { live = false; void client.removeChannel(channel); };
+  }, [session?.user.id]);
 
   useEffect(() => {
     const client = supabase;
@@ -181,7 +200,7 @@ export default function App() {
     <header className="titlebar"><div className="brand"><span className="brand-mark">S</span><span>Sultan <small>TRADING PANEL</small></span></div><div className="window-actions"><button aria-label="Minimize" onClick={() => window.tradeosWindow.minimize()}>−</button><button aria-label="Close" onClick={() => window.tradeosWindow.close()}>×</button></div></header>
     {!session ? <section className="auth"><div className="eyebrow">YOUR PRIVATE TRADING DESK</div><h1>One trade at a time.</h1><p className="intro">Sign in to sync your accounts and checklist across devices.</p><form onSubmit={(event) => void authenticate(event)}><label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'} required /></label>{message && <p className="error" role="alert">{message}</p>}{!isSupabaseConfigured && <p className="hint">Supabase settings are not configured.</p>}<button className="primary" disabled={busy}>{busy ? 'Please wait…' : authMode === 'signin' ? 'Sign in ↗' : 'Create account ↗'}</button></form><button className="text-button auth-toggle" onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setMessage(''); }}>{authMode === 'signin' ? 'Create an account' : 'Back to sign in'}</button></section> : <section className="workspace">
       <div className="dayline"><span className="eyebrow">PRE-TRADE ROUTINE</span><span>{localTradingDay()}</span></div><h1>Checklist for the day</h1><p className="intro">Your rules, beside your chart.</p>
-      <div className="account-area"><div className="field-label">TRADING ACCOUNT</div><div className="account-row">{accounts.map((account) => <button key={account.id} className={`chip ${account.id === accountId ? 'active' : ''}`} onClick={() => setAccountId(account.id)}>{account.label}<small>{account.mode.toUpperCase()}</small></button>)}</div><div className="create-row"><input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="New account name" maxLength={50} /><select value={accountMode} onChange={(e) => setAccountMode(e.target.value as typeof accountMode)}><option value="demo">Demo</option><option value="live">Live</option><option value="paper">Paper</option></select><button className="small-button" onClick={() => void createAccount()}>＋</button></div></div>
+      <div className="account-area"><div className="field-label">TRADING ACCOUNT</div><div className="account-row">{accounts.map((account) => <button key={account.id} className={`chip ${account.id === accountId ? 'active' : ''}`} onClick={() => setAccountId(account.id)}>{account.label}<small>{account.mode.toUpperCase()}</small></button>)}</div>{accountSnapshots[accountId]?.last_sync_at && <div className="account-snapshot" style={{ display: "grid", gap: 4, margin: "0 0 8px", padding: "8px 10px", borderRadius: 8, background: "#f1f6fd", color: "#536782", fontSize: 10 }}><span>Balance <strong>{Number(accountSnapshots[accountId].latest_balance ?? 0).toLocaleString()} {accountSnapshots[accountId].currency}</strong></span><span>Equity <strong>{Number(accountSnapshots[accountId].latest_equity ?? 0).toLocaleString()} {accountSnapshots[accountId].currency}</strong></span></div>}<div className="create-row"><input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="New account name" maxLength={50} /><select value={accountMode} onChange={(e) => setAccountMode(e.target.value as typeof accountMode)}><option value="demo">Demo</option><option value="live">Live</option><option value="paper">Paper</option></select><button className="small-button" onClick={() => void createAccount()}>＋</button></div></div>
       {accountId && <nav className="tabs">{([['routine', 'Checklist'], ['journal', 'Journal'], ['calendar', 'Calendar'], ['stats', 'Stats']] as const).map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>}
       {!accountId && <p className="hint">Add an account to start using your trading desk.</p>}
       {tab === 'routine' && accountId && <><div className="list-area"><div className="field-label">CHECKLIST</div><div className="account-row">{lists.map((list) => <button key={list.id} className={`chip ${list.id === listId ? 'active' : ''}`} onClick={() => setListId(list.id)}>{list.title}</button>)}</div><div className="create-row"><input value={listName} onChange={(e) => setListName(e.target.value)} placeholder="Name a checklist" maxLength={60} /><button className="small-button" onClick={() => void createList()}>Create</button></div></div>
