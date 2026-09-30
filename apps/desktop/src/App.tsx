@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import type { TradeRecord, TradingAccount, TradingChecklist, TradingChecklistItem } from '@sultan/shared';
-import { getTradeInsights, localTradingDay, monthCalendarDays } from '@sultan/shared';
+import type { Mt5Deal, TradeRecord, TradingAccount, TradingChecklist, TradingChecklistItem } from '@sultan/shared';
+import { getMt5Insights, getMt5PositionSummaries, getTradeInsights, localTradingDay, monthCalendarDays } from '@sultan/shared';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 declare global { interface Window { tradeosWindow: { minimize: () => void; close: () => void } } }
@@ -19,6 +19,7 @@ export default function App() {
   const [items, setItems] = useState<TradingChecklistItem[]>([]);
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [mt5Deals, setMt5Deals] = useState<Mt5Deal[]>([]);
   const [tab, setTab] = useState<Tab>('routine');
   const [tradeForm, setTradeForm] = useState<TradeDraft>(emptyTrade);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -73,6 +74,28 @@ export default function App() {
       setTrades((data ?? []) as TradeRecord[]);
     });
     return () => { live = false; };
+  }, [session?.user.id, accountId]);
+
+  useEffect(() => {
+    const client = supabase;
+    const userId = session?.user.id;
+    if (!client || !userId || !accountId) { setMt5Deals([]); return; }
+    let live = true;
+    const loadDeals = async () => {
+      const allRows: Mt5Deal[] = [];
+      for (let from = 0; from < 100000; from += 1000) {
+        const { data, error } = await client.from('mt5_deals').select('*').eq('user_id', userId).eq('account_id', accountId).order('time_msc', { ascending: false }).range(from, from + 999);
+        if (!live) return;
+        if (error) { setMessage(error.message); return; }
+        const rows = (data ?? []) as Mt5Deal[];
+        allRows.push(...rows);
+        if (rows.length < 1000) break;
+      }
+      if (live) setMt5Deals(allRows);
+    };
+    void loadDeals();
+    const channel = client.channel(`desktop-mt5-deals-${accountId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'mt5_deals', filter: `account_id=eq.${accountId}` }, () => { void loadDeals(); }).subscribe();
+    return () => { live = false; void client.removeChannel(channel); };
   }, [session?.user.id, accountId]);
 
   useEffect(() => {
@@ -147,8 +170,12 @@ export default function App() {
     setTrades((rows) => [data as TradeRecord, ...rows]); setTradeForm(emptyTrade); setSelectedDay(payload.trading_day); setTab('journal'); setMessage('Trade saved.');
   }
   const calendarDays = useMemo(() => monthCalendarDays(month), [month]);
-  const tradedDays = useMemo(() => new Set(trades.map((trade) => trade.trading_day)), [trades]);
+  const mt5Positions = useMemo(() => getMt5PositionSummaries(mt5Deals), [mt5Deals]);
+  const mt5Insights = useMemo(() => getMt5Insights(mt5Positions), [mt5Positions]);
+  const importedDays = mt5Positions.map((position) => localTradingDay(new Date(position.openedAt)));
+  const tradedDays = useMemo(() => new Set([...trades.map((trade) => trade.trading_day), ...importedDays]), [trades, importedDays]);
   const selectedTrades = trades.filter((trade) => trade.trading_day === selectedDay);
+  const selectedMt5Positions = mt5Positions.filter((position) => localTradingDay(new Date(position.openedAt)) === selectedDay);
   const insights = getTradeInsights(trades);
   return <main className="window">
     <header className="titlebar"><div className="brand"><span className="brand-mark">S</span><span>Sultan <small>TRADING PANEL</small></span></div><div className="window-actions"><button aria-label="Minimize" onClick={() => window.tradeosWindow.minimize()}>−</button><button aria-label="Close" onClick={() => window.tradeosWindow.close()}>×</button></div></header>
@@ -170,7 +197,9 @@ export default function App() {
       </div>}
       {tab === 'calendar' && accountId && <div className="calendar-panel"><div className="eyebrow">TRADING HISTORY</div><h2>Days you traded</h2><div className="month-bar"><button aria-label="Previous month" onClick={() => setMonth((date) => new Date(date.getFullYear(), date.getMonth() - 1, 1))}>‹</button><strong>{new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(month)}</strong><button aria-label="Next month" onClick={() => setMonth((date) => new Date(date.getFullYear(), date.getMonth() + 1, 1))}>›</button></div><div className="calendar-grid weekdays">{['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => <span key={`${d}-${i}`}>{d}</span>)}</div><div className="calendar-grid">{calendarDays.map((day) => <button key={day} aria-label={`${day}${tradedDays.has(day) ? ', traded' : ''}`} className={`calendar-day ${day.slice(0, 7) !== localTradingDay(month).slice(0, 7) ? 'outside' : ''} ${tradedDays.has(day) ? 'traded' : ''} ${selectedDay === day ? 'selected' : ''}`} onClick={() => setSelectedDay(day)}>{Number(day.slice(-2))}{tradedDays.has(day) && <i />}</button>)}</div><div className="journal-list"><strong>{selectedDay}</strong>{selectedTrades.map((trade) => <article key={trade.id}><strong>{trade.symbol} · {trade.side.toUpperCase()}</strong><small>{trade.setup} · {trade.outcome ?? 'Pending'}</small><p>{trade.reason}</p></article>)}{!selectedTrades.length && <p className="hint">No trades logged this day.</p>}</div></div>}
       {tab === 'stats' && accountId && <div className="calendar-panel stats-panel"><div className="eyebrow">PROCESS REVIEW</div><h2>Your trading stats</h2><div className="stats-mini"><div><small>WIN RATE</small><strong>{insights.winRate.toFixed(1)}%</strong></div><div><small>TRADES</small><strong>{insights.total}</strong></div><div><small>PLAN FOLLOWING</small><strong>{insights.planFollowingRate.toFixed(0)}%</strong></div><div><small>WIN STREAK</small><strong>{insights.currentWinStreak}</strong></div></div><p className="hint">Based on journal outcomes and your own plan-following answers. No balance or P&amp;L is inferred.</p></div>}
-      <div className="account-bottom"><span title={session.user.email}>{session.user.email}</span><button className="text-button" onClick={() => void supabase?.auth.signOut()}>Sign out</button></div>{message && <p className="message" role="status">{message}<button onClick={() => setMessage('')}>×</button></p>}
+      {tab === 'journal' && accountId && <section className="journal-panel"><div className="eyebrow">IMPORTED FROM MT5</div><h2>Broker trade history</h2><div className="journal-list">{mt5Positions.slice(0, 12).map((position) => <article key={position.key}><strong>{position.symbol} · {position.side.toUpperCase()} · {position.status}</strong><small>{new Date(position.openedAt).toLocaleString()} · {position.volume.toFixed(2)} lots</small><p>{position.status === 'closed' ? position.netProfit.toFixed(2) + ' ' + (position.currency || '') : 'Position is open'}</p></article>)}{!mt5Positions.length && <p className="hint">Connect MT5 from Sultan web to see imported history here.</p>}</div></section>}
+      {tab === 'calendar' && accountId && selectedMt5Positions.length > 0 && <section className="journal-panel"><div className="eyebrow">MT5 · {selectedDay}</div><h2>Imported positions</h2><div className="journal-list">{selectedMt5Positions.map((position) => <article key={position.key}><strong>{position.symbol} · {position.side.toUpperCase()}</strong><small>{position.status} · {position.volume.toFixed(2)} lots</small><p>{position.status === 'closed' ? position.netProfit.toFixed(2) + ' ' + (position.currency || '') : 'Position is open'}</p></article>)}</div></section>}
+      {tab === 'stats' && accountId && <section className="journal-panel"><div className="eyebrow">MT5 ACCOUNT RESULTS</div><h2>Broker history</h2><div className="journal-list"><article><strong>Realized net</strong><p>{mt5Insights.realizedNet.toFixed(2)} {mt5Insights.currency}</p></article><article><strong>Closed / open</strong><p>{mt5Insights.closed} / {mt5Insights.open}</p></article><article><strong>Wins / losses</strong><p>{mt5Insights.wins} / {mt5Insights.losses} · {mt5Insights.winRate.toFixed(1)}% win rate</p></article><article><strong>Buy / sell</strong><p>{mt5Insights.buys} / {mt5Insights.sells} · {mt5Insights.lots.toFixed(2)} lots</p></article>{!mt5Positions.length && <p className="hint">Connect MT5 from Sultan web to import your account history.</p>}</div></section>}      <div className="account-bottom"><span title={session.user.email}>{session.user.email}</span><button className="text-button" onClick={() => void supabase?.auth.signOut()}>Sign out</button></div>{message && <p className="message" role="status">{message}<button onClick={() => setMessage('')}>×</button></p>}
     </section>}
     <footer>No broker passwords. No signals. Just your process.</footer>
   </main>;
